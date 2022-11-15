@@ -1,0 +1,14 @@
+{
+  "name": "cleanup-1",
+  "version": "1.0.0",
+  "description": "Start cleanup by removing the function association from the distribution",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Demian Hess, AWS",
+  "license": "MIT-0",
+  "dependencies": {
+    "aws-sdk": "^2.1138.0"
+  }
+}

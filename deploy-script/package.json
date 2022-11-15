@@ -1,0 +1,15 @@
+{
+  "name": "deploy-full-paywall-demo",
+  "version": "1.0.0",
+  "description": "Deploys the full paywall demo",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Demian Hess, AWS",
+  "license": "MIT-0",
+  "dependencies": {
+    "aws-sdk": "^2.1138.0",
+    "jwk-to-pem": "2.0.5"
+  }
+}

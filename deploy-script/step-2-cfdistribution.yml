@@ -1,0 +1,407 @@
+AWSTemplateFormatVersion: '2010-09-09'
+# © 2022 Amazon Web Services, Inc. or its affiliates. All Rights Reserved.
+# This work is licensed under a MIT-0 License.
+
+Description: 
+  Create CloudFront distribution, mock origin, and Lambda@Edge function.
+  **WARNING** This template creates a CloudFront Distribution, Lambda functions, 
+  API Gateway and related resources. You will be billed for the AWS resources 
+  used if you create a stack from this template.
+
+Parameters:
+  Environment:
+    Type: String
+  PublicKeys:
+    Type: String
+  ApiKeyValue:
+    Type: String
+  SuffixValue:
+     Type: String
+    
+Transform: AWS::Serverless-2016-10-31
+
+Resources:
+  IAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+                - apigateway.amazonaws.com
+                - edgelambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs'
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+
+  PaywallDemoLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 3
+
+  PaywallDemoMockOriginFunction:
+    Type: AWS::Serverless::Function
+    DependsOn:
+    - PaywallDemoLogs
+    Properties:
+      ## Serves as an origin for the CloudFront Distribution
+      FunctionName: !Sub 'PaywallDemoMockOriginFunction-${SuffixValue}-${Environment}'
+      Timeout: 20
+      Handler: index.handler
+      Runtime: nodejs16.x
+      Role: !GetAtt 'IAMRole.Arn'
+      Events:
+        DefaultRoute:
+          Type: Api
+          Properties:
+            Path: /{param+}
+            Method: ANY
+            RestApiId: !Ref 'PaywallDemoMockOriginApi'
+      InlineCode: |
+        'use strict';
+        // This code simulates an origin. Rather than return full content items,
+        // it only returns a json object indicating whether it is returning
+        // "full content" for a subscriber, or "preview only" for non-subscribers
+
+        exports.handler = async (event) => {
+            console.log(event.path);
+            let pathTokens = event.path.split('/');
+
+            // Could use the product name and content id for additional checks. 
+            // In particular, the origin should check that the content id actually is part
+            // of the specified product. This will prevent malicious users
+            // from submitting a request for a product for which they have a subscription,
+            // but specifying a content item that appears in a different product
+            // that they are not supposed to access.
+
+            let productName = pathTokens[1];
+            let contentId = pathTokens[3];
+            
+            if (!productName || !contentId){
+                return {
+                    statusCode: 400,
+                    body: JSON.stringify('Invalid URL')
+                }
+            }
+
+            // Subscription status is in the header set by the Lambda@Edge function
+            let isSubscriber = event.headers['X-Is-Subscriber'];
+
+            if (isSubscriber === 'true'){
+                return {
+                    statusCode: 200,
+                    body: 'Full content'
+                }
+            }
+            else {
+                return {
+                    statusCode: 200,
+                    body: 'Preview only'
+                }
+            }          
+        };
+
+  PaywallDemoMockOriginApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      ## Routes calls to the mock origin (Lambda function)
+      StageName: !Ref 'Environment'
+      Auth:
+        ApiKeyRequired: 'true'
+      DefinitionBody:
+        openapi: 3.0.1
+        info:
+          title: PaywallMockOriginApi
+        paths:
+          /{proxy+}:
+            x-amazon-apigateway-any-method:
+              isDefaultRoute: false
+              x-amazon-apigateway-integration:
+                payloadFormatVersion: '2.0'
+                type: aws_proxy
+                httpMethod: POST
+                uri: !Sub 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${PaywallDemoMockOriginFunction}/invocations'
+                connectionType: INTERNET
+        x-amazon-apigateway-importexport-version: '1.0'
+  DemoUsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    Properties:
+      ## Allows creation of API Key and limits number of requests to the demo
+      ApiStages:
+        - ApiId: !Ref 'PaywallDemoMockOriginApi'
+          Stage: !Ref 'PaywallDemoMockOriginApi.Stage'
+      Quota:
+        Limit: 1000
+        Period: DAY
+      UsagePlanName: PaywallDemoUsagePlan
+  ApiKey:
+    Type: AWS::ApiGateway::ApiKey
+    Properties:
+      ## Key associated with the API Gateway resources so they can only be called by CloudFront
+      Enabled: true
+      Value: !Ref 'ApiKeyValue'
+      StageKeys:
+        - RestApiId: !Ref 'PaywallDemoMockOriginApi'
+          StageName: !Ref 'PaywallDemoMockOriginApi.Stage'
+  LinkUsagePlanApiKey:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyType: API_KEY
+      KeyId: !Ref 'ApiKey'
+      UsagePlanId: !Ref 'DemoUsagePlan'
+  PaywallDemoCfCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      ## CloudFront Distribution will use the x-is-subscriber header as part of the cache key
+      CachePolicyConfig:
+        Name: !Join ['-', ['PaywallDemoCachePolicyIncludeIsSubHeader', !Ref SuffixValue]]
+        DefaultTTL: 86400
+        MaxTTL: 86400
+        MinTTL: 86400
+        ParametersInCacheKeyAndForwardedToOrigin:
+          CookiesConfig:
+            CookieBehavior: none
+          EnableAcceptEncodingGzip: false
+          QueryStringsConfig:
+            QueryStringBehavior: none
+          HeadersConfig:
+            HeaderBehavior: whitelist
+            Headers:
+              - x-is-subscriber
+  PaywallDemoCfOriginRequestPolicy:
+    Type: AWS::CloudFront::OriginRequestPolicy
+    DependsOn: PaywallDemoCfCachePolicy
+    Properties:
+      ## CloudFront Distribution will pass the x-is-subscriber and x-api-key headers to origin
+      OriginRequestPolicyConfig:
+        Name: !Sub 'PaywallDemoPassHeader'
+        CookiesConfig:
+          CookieBehavior: none
+        QueryStringsConfig:
+          QueryStringBehavior: all
+        HeadersConfig:
+          HeaderBehavior: whitelist
+          Headers:
+            - x-is-subscriber
+            - x-api-key
+  PaywallDemoCfDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      ## CloudFront Distribution invokes paywall logic for content requests
+      DistributionConfig:
+        Enabled: 'true'
+        Origins:
+          - Id: MockOrigin
+            DomainName: !Sub '${PaywallDemoMockOriginApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}'
+            OriginPath: !Sub '/${Environment}'
+            CustomOriginConfig:
+              HTTPPort: 80
+              OriginProtocolPolicy: match-viewer
+        CacheBehaviors:
+          - PathPattern: /*/content/*
+            AllowedMethods:
+              - HEAD
+              - GET
+              - OPTIONS
+            CachePolicyId: !Ref 'PaywallDemoCfCachePolicy'
+            TargetOriginId: MockOrigin
+            LambdaFunctionAssociations:
+              - EventType: viewer-request
+                LambdaFunctionARN: !Ref 'PaywallDemoLambdaEdgeFunction.Version'
+            OriginRequestPolicyId: !Ref 'PaywallDemoCfOriginRequestPolicy'
+            ViewerProtocolPolicy: allow-all
+        DefaultCacheBehavior:
+          TargetOriginId: MockOrigin
+          CachePolicyId: !Ref 'PaywallDemoCfCachePolicy'
+          ViewerProtocolPolicy: allow-all
+  PaywallDemoLambdaEdgeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      ## Edge function implements the paywall logic
+      Role: !GetAtt 'IAMRole.Arn'
+      Runtime: nodejs16.x
+      Handler: index.handler
+      Timeout: 5
+      FunctionName: !Sub 'PaywallDemoLambdaEdgeFunction-${SuffixValue}'
+      AutoPublishAlias: live
+      InlineCode: !Sub | 
+        'use strict';
+        // Code applies the paywall logic by checking the JWT for
+        // the user's subscriptions and then seeing whether the
+        // requested URL maps to one of those products. The logic
+        // could be extended by performing a database lookup
+        // to get additional parameters that can be used to 
+        // determine authorization. Additionally, the process
+        // that generates the JWT could be extended to embed
+        // paywall claims (such as user segmentation) in the token.
+        const crypto = require('crypto');
+
+        // The public key(s) come from the Identity Provider that
+        // issued the JWT. The values are passed in to CloudFormation
+        // during the deployment process. See the nodejs code that
+        // handles the deploymentin deploy-script/index.js.
+        const KEYS = ${PublicKeys}
+
+        // Response when JWT is missing or invalid
+        const response401 = {
+                status: '401',
+                statusDescription: 'Not authorized',
+                headers: {            
+                    'content-type': [{
+                        key: 'Content-Type',
+                        value: 'text/html'
+                    }]
+                },
+                body: 'Please login',
+            };
+
+        // Map product from url to code. This could be
+        // retrieved from a database if the products change
+        // frequently.
+        const mapping = {
+            'product-a': 'A',
+            'product-b': 'B'
+        }
+
+        // Helpers to go to/from base64url and base64
+        function base64urlDecode(str) {
+            return Buffer.from(str, 'base64url').toString('utf8');
+        }
+
+        function base64urlToBase64(str) {
+            return Buffer.from(str, 'base64url').toString('base64')
+        }
+
+        function toBase64(str){
+            return  Buffer.from(str, 'utf8').toString('base64');
+        }
+
+        function getKey(kid) {
+          try {            
+            return KEYS[kid];
+          }
+          catch (e){
+            return null;
+          }
+          
+        }
+
+        function verify(jwt){
+            try {
+                let header = jwt.split('.')[0];
+                let headerObj = JSON.parse(base64urlDecode(header));
+                let payload = jwt.split('.')[1];
+                let signature = jwt.split('.')[2];
+                const verifyFunction = crypto.createVerify('RSA-SHA256');
+                verifyFunction.write(header + '.' + payload);
+                verifyFunction.end();
+                let kid = headerObj.kid;
+                let base64Signature = base64urlToBase64(signature);
+                return verifyFunction.verify(getKey(kid), base64Signature, 'base64');   
+            }
+            catch(e){
+                console.log(e)
+                return false;
+            }
+        }
+
+        // Helper gets the JWT claims as a JSON object
+        function getObj(jwt){
+            let jwtPayload = jwt.split('.')[1];
+            let str = base64urlDecode(jwtPayload);
+            try {
+                return JSON.parse(str);        
+            }
+            catch(e){
+                return [];
+            }    
+        }
+
+        // Check if the jwt is expired
+        function isExpired(jwtObj){
+            let expiration = jwtObj.exp;
+            let now = (+ new Date()) / 1000;
+            if (expiration < now){
+                return true;
+            }    
+            else {
+                return false;
+            }
+        }
+
+        // Entry point
+        exports.handler = async (event) => {
+            console.log(JSON.stringify(event, null, 2));
+            const request = event.Records[0].cf.request;
+
+            // For this demo, only deal with the GET requests; send everything else to the origin
+            if (request.method !== 'GET'){
+                return request;
+            }
+
+            const STR = 'jwt=';
+            let jwt = null;
+            
+            // Find the cookie with the jwt. We could  import
+            // a cookie library, but this demo is written to minimize
+            // external dependencies.
+            if (request.headers.cookie){
+                for (let i=0; i< request.headers.cookie.length; i++){
+                    if (request.headers.cookie[i].value.indexOf(STR) >= 0){                
+                        jwt = request.headers.cookie[i].value.substring(STR.length);
+                        break;
+                    }
+                }
+            }
+            
+            if (!jwt){
+                return response401;
+            }
+            
+            let verified = verify(jwt);
+            
+            if (!verified){
+                return response401;
+            }
+            
+            let obj = getObj(jwt);
+
+            if (isExpired(obj)){
+                return response401;
+            }
+            
+            let subs = obj['custom:subs'] ? obj['custom:subs'].split(',') : [];     
+            let productFromUrl = request.uri.split('/')[1];
+
+            // If product is not in the url then send to origin to deal with for this demo
+            if (!productFromUrl){
+                return request;
+            }
+
+            // Set the cache key based on whether or not the user is authorized.
+            // To support a different paywall model, the code could call a database
+            // like DynamoDB to retrieve additional user information and then execute custom 
+            // authorization logic here.
+
+            if (subs.includes(mapping[productFromUrl.toLowerCase()])){              
+                request.headers['x-is-subscriber'] = [{'value':'true'}];
+            }
+            else {
+                request.headers['x-is-subscriber'] = [{'value':'false'}];
+            }
+
+            // Now set the API Key header to prove this request is coming from CloudFront
+            request.headers['x-api-key'] = [{'value': '${ApiKeyValue}'}];
+            return request;
+        }
+
+Outputs:
+  CFDistributionDomain:
+    Value: !GetAtt 'PaywallDemoCfDistribution.DomainName'
+  CFDistributionId:
+    Value: !Ref 'PaywallDemoCfDistribution'

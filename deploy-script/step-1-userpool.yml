@@ -1,0 +1,76 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+# © 2022 Amazon Web Services, Inc. or its affiliates. All Rights Reserved.
+# This work is licensed under a MIT-0 License.
+
+Description: 
+  Create Cognito user pool so that we can generate the public key and issue JWTs
+  **WARNING** This template creates a Cognito User Pool and related 
+  resources. You will be billed for the AWS resources used if you create a stack 
+  from this template.
+
+Parameters:
+  ExternalId:
+    Type: String
+
+Transform: AWS::Serverless-2016-10-31
+
+Resources:
+  IAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - cognito-idp.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSIoTDeviceDefenderPublishFindingsToSNSMitigationAction
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      ## Creates Cognito users who can then retrieve JWTs to be used in the demonstration
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: admin_only
+            Priority: 1
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      MfaConfiguration: OPTIONAL
+      Schema:
+        - AttributeDataType: String
+          Mutable: true
+          Name: subs
+          Required: false
+      UsernameConfiguration:
+        CaseSensitive: false
+      UserPoolName: PaywallDemoUserPool
+      AutoVerifiedAttributes:
+        - email
+      SmsConfiguration:
+        ExternalId: !Ref 'ExternalId'
+        SnsCallerArn: !GetAtt 'IAMRole.Arn'
+        SnsRegion: !Ref 'AWS::Region'
+  Client:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ## Client that will issue the JWTs
+      UserPoolId: !Ref 'UserPool'
+      EnableTokenRevocation: true
+      SupportedIdentityProviders:
+        - COGNITO
+      ExplicitAuthFlows:
+        - ALLOW_ADMIN_USER_PASSWORD_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+Outputs:
+  UserPoolUrl:
+    Value: !Sub '${UserPool.ProviderURL}/.well-known/jwks.json'
+  ClientId:
+    Value: !Ref 'Client'
+  UserPoolId:
+    Value: !Ref 'UserPool'

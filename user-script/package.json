@@ -1,0 +1,14 @@
+{
+  "name": "create-user",
+  "version": "1.0.0",
+  "description": "Script to create user and to get a token",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Demian Hess, AWS",
+  "license": "MIT-0",
+  "dependencies": {
+    "aws-sdk": "^2.1138.0"
+  }
+}
