@@ -179,7 +179,7 @@ Resources:
     Properties:
       ## CloudFront Distribution will pass the x-is-subscriber and x-api-key headers to origin
       OriginRequestPolicyConfig:
-        Name: !Sub 'PaywallDemoPassHeader'
+        Name: !Join ['-', ['PaywallDemoPassHeader', !Ref SuffixValue]]
         CookiesConfig:
           CookieBehavior: none
         QueryStringsConfig:
