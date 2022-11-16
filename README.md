@@ -52,11 +52,15 @@ To create a user, do the following:
 
 1. In a console or terminal, navigate into the folder named `user-script`.
 2. If this is the first time, run `npm install`.
-3. Once installation has finished, enter `node . create {username} {password} {subscription}`
-   Replace {username} with a username value you want to create
-   Replace {password} with a password value you want to associate with the username
-   Replace {subscriptions} with the product(s) you want the user to be able to access. For this demo, use the value "A" or "B" (these are the only products supported by the demo).
-
+3. Once installation has finished, enter `node . create {username} {password} {subscription} {stack name 1} {stack name 2}`
+   * Replace {username} with a username value you want to create
+   * Replace {password} with a password value you want to associate with the username
+   * Replace {subscriptions} with the product(s) you want the user to be able to access. For this demo, use the value "A" or "B" (these are the only products supported by the demo).
+   * Replace {stack name 1} and {stack name 2} with the names 
+   of the two CloudFormation stacks created by the deployment process. 
+   You can find these by logging into the CloudFormation management console. 
+   You can enter the stack names in any order.
+   
 The system will create the specified user and then return an ID Token you can use to make content requests.
 
 To make content requests, see the documentation below.
@@ -67,8 +71,11 @@ If you have already created a user, then you can run the script and specify a us
 To login as an existing user, do the following:
 
 1. In a console or terminal, navigate into the folder named `user-script`.
-2. Run the command `node . login {username} {password}`
-   Replace {username} and {password} with the values you previously created.
+2. Run the command `node . login {username} {password} {stack name 1} {stack name 2}`
+   * Replace {username} and {password} with the values you previously created. 
+   * Replace {stack name 1} and {stack name 2} with the names of the two CloudFormation stacks 
+   created by the deployment process. You can find these by logging into the CloudFormation management console. 
+   You can enter the stack names in any order.
 
 The script will return the ID Token you can use to make content requests.
 
