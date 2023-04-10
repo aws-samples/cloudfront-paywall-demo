@@ -9,7 +9,7 @@
   "author": "Demian Hess, AWS",
   "license": "MIT-0",
   "dependencies": {
-    "aws-sdk": "^2.1138.0",
+    "aws-sdk": "^2.1354.0",
     "jwk-to-pem": "2.0.5"
   }
 }
